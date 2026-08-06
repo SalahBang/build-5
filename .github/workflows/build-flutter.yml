@@ -126,6 +126,18 @@ jobs:
             fi
           fi
 
+          if [ $BUILD_EXIT -ne 0 ]; then
+            INCOMPAT_ERROR=$(grep -cE "can't be (extended|implemented|mixed in) outside of its library|Error: The (method|getter|setter|class|argument) .* (isn't defined|can't be)" "$BUILD_LOG_FILE" || true)
+
+            if [ "$INCOMPAT_ERROR" -gt 0 ]; then
+              echo ""
+              echo "Terdeteksi kemungkinan incompatibility versi package dengan Flutter SDK, mencoba flutter pub upgrade dan build ulang..."
+              flutter pub upgrade
+              flutter build apk --release --no-tree-shake-icons
+              BUILD_EXIT=$?
+            fi
+          fi
+
           exit $BUILD_EXIT
 
       - name: Upload Artifact
