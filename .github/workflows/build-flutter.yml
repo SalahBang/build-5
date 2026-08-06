@@ -109,9 +109,41 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Flutter Pub Get
+      - name: Flutter Pub Get (attempt 1)
+        id: pub_get_1
+        working-directory: ${{ env.PROJECT_ROOT }}
+        continue-on-error: true
+        run: flutter pub get 2>&1 | tee /tmp/pub_get_1.log
+
+      - name: Deteksi Saran Versi Flutter dari Pub
+        if: steps.pub_get_1.outcome == 'failure'
+        run: |
+          SUGGESTED=$(grep -oE "Try using the Flutter SDK version: [0-9]+\.[0-9]+\.[0-9]+" /tmp/pub_get_1.log | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+          if [ -n "$SUGGESTED" ]; then
+            echo "Pub menyarankan Flutter versi: $SUGGESTED"
+            echo "SUGGESTED_FLUTTER_VERSION=$SUGGESTED" >> $GITHUB_ENV
+          else
+            echo "Tidak ada saran versi spesifik dari pub, gagal murni."
+          fi
+
+      - name: Setup Flutter (ganti ke versi saran pub)
+        if: steps.pub_get_1.outcome == 'failure' && env.SUGGESTED_FLUTTER_VERSION != ''
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.SUGGESTED_FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Flutter Pub Get (attempt 2, setelah ganti versi)
+        if: steps.pub_get_1.outcome == 'failure' && env.SUGGESTED_FLUTTER_VERSION != ''
         working-directory: ${{ env.PROJECT_ROOT }}
         run: flutter pub get
+
+      - name: Gagalkan Job Jika Pub Get Tetap Gagal
+        if: steps.pub_get_1.outcome == 'failure' && env.SUGGESTED_FLUTTER_VERSION == ''
+        run: |
+          echo "flutter pub get gagal dan tidak ada saran versi Flutter yang bisa dicoba."
+          exit 1
 
       - name: Tune JVM Memory untuk Gradle
         working-directory: ${{ env.PROJECT_ROOT }}
