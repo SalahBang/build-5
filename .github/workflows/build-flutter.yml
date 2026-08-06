@@ -52,12 +52,28 @@ jobs:
 
       - name: Install NDK and SDK Platform
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" "platforms;android-36" "build-tools;35.0.0" --sdk_root=$ANDROID_HOME 2>&1 | tail -3 || true
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;27.0.12077973" "ndk;28.2.13676358" "platforms;android-36" "build-tools;35.0.0" --sdk_root=$ANDROID_HOME 2>&1 | tail -3 || true
 
-      - name: Setup Flutter
+      - name: Detect Required Flutter Version
+        run: |
+          if grep -A3 '^environment:' "${{ env.PROJECT_ROOT }}/pubspec.yaml" | grep -qE '^\s*flutter:\s*[''"]?[0-9]'; then
+            echo "HAS_FLUTTER_VERSION=true" >> $GITHUB_ENV
+          else
+            echo "HAS_FLUTTER_VERSION=false" >> $GITHUB_ENV
+          fi
+
+      - name: Setup Flutter (versi sesuai project)
+        if: env.HAS_FLUTTER_VERSION == 'true'
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.32.x
+          flutter-version-file: ${{ env.PROJECT_ROOT }}/pubspec.yaml
+          channel: stable
+          cache: true
+
+      - name: Setup Flutter (fallback stable terbaru)
+        if: env.HAS_FLUTTER_VERSION == 'false'
+        uses: subosito/flutter-action@v2
+        with:
           channel: stable
           cache: true
 
@@ -67,7 +83,50 @@ jobs:
 
       - name: Build APK Release
         working-directory: ${{ env.PROJECT_ROOT }}
-        run: flutter build apk --release --no-tree-shake-icons
+        run: |
+          set +e
+          BUILD_LOG_FILE=$(mktemp)
+          flutter build apk --release --no-tree-shake-icons 2>&1 | tee "$BUILD_LOG_FILE"
+          BUILD_EXIT=${PIPESTATUS[0]}
+
+          if [ $BUILD_EXIT -ne 0 ]; then
+            REQUIRED_SDK=$(grep -oE "cannot be smaller than version [0-9]+" "$BUILD_LOG_FILE" | grep -oE "[0-9]+" | head -1)
+
+            if [ -n "$REQUIRED_SDK" ]; then
+              echo ""
+              echo "Terdeteksi butuh minSdk minimal $REQUIRED_SDK, auto-patch build.gradle dan build ulang..."
+              python3 - "$REQUIRED_SDK" <<'PYEOF'
+import re, os, sys
+
+required = sys.argv[1]
+candidates = ["android/app/build.gradle.kts", "android/app/build.gradle"]
+
+for path in candidates:
+    if os.path.exists(path):
+        with open(path) as f:
+            content = f.read()
+        new_content = re.sub(
+            r'(minSdk(?:Version)?\s*=?\s*)(flutter\.minSdkVersion|\d+)',
+            lambda m: m.group(1) + required,
+            content
+        )
+        if new_content != content:
+            with open(path, 'w') as f:
+                f.write(new_content)
+            print(f"Patched {path}: minSdk -> {required}")
+        else:
+            print(f"Tidak menemukan baris minSdk di {path} untuk di-patch")
+        break
+else:
+    print("Tidak menemukan file build.gradle/build.gradle.kts")
+PYEOF
+
+              flutter build apk --release --no-tree-shake-icons
+              BUILD_EXIT=$?
+            fi
+          fi
+
+          exit $BUILD_EXIT
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
